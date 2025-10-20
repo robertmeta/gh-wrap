@@ -67,6 +67,20 @@
     map)
   "Keymap for `gh-issue-mode'.")
 
+(defvar gh-pr-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "d") 'gh-pr-view-diff)
+    (define-key map (kbd "c") 'gh-pr-view-checks)
+    (define-key map (kbd "C") 'gh-pr-view-comment)
+    (define-key map (kbd "r") 'gh-pr-view-review)
+    (define-key map (kbd "a") 'gh-pr-view-approve)
+    (define-key map (kbd "m") 'gh-pr-view-merge)
+    (define-key map (kbd "o") 'gh-pr-view-open-browser)
+    (define-key map (kbd "g") 'gh-pr-view-refresh)
+    (define-key map (kbd "q") 'quit-window)
+    map)
+  "Keymap for `gh-pr-view-mode'.")
+
 (defvar-local gh-current-filters nil
   "Current filters applied to the list.")
 
@@ -74,7 +88,10 @@
   "Cached items data for the current buffer.")
 
 (defvar-local gh-list-type nil
-  "Type of list: 'pr or 'issue.")
+  "Type of list: \\='pr or \\='issue.")
+
+(defvar-local gh-current-pr-number nil
+  "The PR number for the current PR view buffer.")
 
 ;;; Utility functions
 
@@ -239,12 +256,17 @@
   (message "Loading PR #%d..." pr-number)
   (let ((output (gh--run-command "pr" "view" (number-to-string pr-number))))
     (with-current-buffer (get-buffer-create (format "*GitHub PR #%d*" pr-number))
+      (gh-pr-view-mode)
+      (setq gh-current-pr-number pr-number)
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert output)
+        ;; Clean up control characters
         (goto-char (point-min))
-        (view-mode)
-        (switch-to-buffer (current-buffer)))
+        (while (re-search-forward "[\r\f]" nil t)
+          (replace-match ""))
+        (goto-char (point-min)))
+      (switch-to-buffer (current-buffer))
       (message "Loaded PR #%d" pr-number))))
 
 (defun gh-pr-diff-at-point ()
@@ -459,6 +481,74 @@
   (setq gh-current-filters (list "--assignee" assignee))
   (gh-refresh))
 
+;;; PR View Commands (for use in gh-pr-view-mode)
+
+(defun gh-pr-view-diff ()
+  "Show diff for the current PR."
+  (interactive)
+  (when gh-current-pr-number
+    (let ((output (gh--run-command "pr" "diff" (number-to-string gh-current-pr-number))))
+      (with-current-buffer (get-buffer-create (format "*GitHub PR #%d Diff*" gh-current-pr-number))
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert output)
+          (diff-mode)
+          (goto-char (point-min))
+          (switch-to-buffer (current-buffer))))
+      (message "Showing diff for PR #%d" gh-current-pr-number))))
+
+(defun gh-pr-view-checks ()
+  "Show checks for the current PR."
+  (interactive)
+  (when gh-current-pr-number
+    (let ((output (gh--run-command "pr" "checks" (number-to-string gh-current-pr-number))))
+      (message "%s" output))))
+
+(defun gh-pr-view-comment ()
+  "Add comment to the current PR."
+  (interactive)
+  (when gh-current-pr-number
+    (gh--run-command "pr" "comment" (number-to-string gh-current-pr-number))
+    (message "Adding comment to PR #%d..." gh-current-pr-number)))
+
+(defun gh-pr-view-review ()
+  "Review the current PR."
+  (interactive)
+  (when gh-current-pr-number
+    (gh--run-command "pr" "review" (number-to-string gh-current-pr-number))
+    (message "Reviewing PR #%d..." gh-current-pr-number)))
+
+(defun gh-pr-view-approve ()
+  "Approve the current PR."
+  (interactive)
+  (when gh-current-pr-number
+    (when (y-or-n-p (format "Approve PR #%d? " gh-current-pr-number))
+      (gh--run-command "pr" "review" "--approve" (number-to-string gh-current-pr-number))
+      (message "Approved PR #%d" gh-current-pr-number)
+      (gh-pr-view-refresh))))
+
+(defun gh-pr-view-merge ()
+  "Merge the current PR."
+  (interactive)
+  (when gh-current-pr-number
+    (when (y-or-n-p (format "Merge PR #%d? " gh-current-pr-number))
+      (gh--run-command "pr" "merge" (number-to-string gh-current-pr-number))
+      (message "Merged PR #%d" gh-current-pr-number)
+      (gh-pr-view-refresh))))
+
+(defun gh-pr-view-open-browser ()
+  "Open the current PR in browser."
+  (interactive)
+  (when gh-current-pr-number
+    (gh--run-command "pr" "view" "--web" (number-to-string gh-current-pr-number))
+    (message "Opening PR #%d in browser..." gh-current-pr-number)))
+
+(defun gh-pr-view-refresh ()
+  "Refresh the current PR view."
+  (interactive)
+  (when gh-current-pr-number
+    (gh-view-pr gh-current-pr-number)))
+
 ;;; Major modes
 
 (define-derived-mode gh-pr-mode special-mode "GitHub-PR"
@@ -481,6 +571,20 @@
   (when (featurep 'emacspeak)
     (add-hook 'post-command-hook 'gh--emacspeak-post-command nil t)))
 
+(define-derived-mode gh-pr-view-mode special-mode "GitHub-PR-View"
+  "Major mode for viewing a single GitHub pull request.
+
+\\{gh-pr-view-mode-map}"
+  (setq truncate-lines nil)
+  (setq buffer-read-only t)
+  (setq mode-line-format
+        '("%e" mode-line-front-space
+          mode-line-buffer-identification
+          "  "
+          "PR #" (:eval (when gh-current-pr-number (number-to-string gh-current-pr-number)))
+          "  "
+          mode-line-end-spaces)))
+
 (defun gh--emacspeak-post-command ()
   "Emacspeak post-command hook for gh mode."
   (when (and (featurep 'emacspeak)
@@ -492,7 +596,8 @@
 
 (with-eval-after-load 'evil
   (evil-set-initial-state 'gh-pr-mode 'emacs)
-  (evil-set-initial-state 'gh-issue-mode 'emacs))
+  (evil-set-initial-state 'gh-issue-mode 'emacs)
+  (evil-set-initial-state 'gh-pr-view-mode 'emacs))
 
 ;;; Emacspeak advice
 

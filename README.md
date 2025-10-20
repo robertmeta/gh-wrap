@@ -104,6 +104,22 @@ gh auth login
 | `n/P` | Next/previous line               |
 | `q`   | Quit window                      |
 
+### Keybindings in PR Detail View (gh-pr-view-mode)
+
+When viewing a single PR (after pressing `RET` from the PR list):
+
+| Key | Command                          |
+|-----|----------------------------------|
+| `d` | Show diff                        |
+| `c` | Show CI checks                   |
+| `C` | Add comment                      |
+| `r` | Review PR (interactive)          |
+| `a` | Approve PR                       |
+| `m` | Merge PR                         |
+| `o` | Open in browser                  |
+| `g` | Refresh PR view                  |
+| `q` | Quit window                      |
+
 ### Display Format
 
 Pull requests and issues are displayed in a table format:
