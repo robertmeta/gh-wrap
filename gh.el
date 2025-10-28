@@ -46,6 +46,7 @@
     (define-key map (kbd "n") 'next-line)
     (define-key map (kbd "p") 'previous-line)
     (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "?") 'gh-help)
     map)
   "Keymap for `gh-pr-mode'.")
 
@@ -64,6 +65,7 @@
     (define-key map (kbd "n") 'next-line)
     (define-key map (kbd "P") 'previous-line)
     (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "?") 'gh-help)
     map)
   "Keymap for `gh-issue-mode'.")
 
@@ -78,8 +80,20 @@
     (define-key map (kbd "o") 'gh-pr-view-open-browser)
     (define-key map (kbd "g") 'gh-pr-view-refresh)
     (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "?") 'gh-help)
     map)
   "Keymap for `gh-pr-view-mode'.")
+
+(defvar gh-issue-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C") 'gh-issue-view-comment)
+    (define-key map (kbd "e") 'gh-issue-view-edit)
+    (define-key map (kbd "o") 'gh-issue-view-open-browser)
+    (define-key map (kbd "g") 'gh-issue-view-refresh)
+    (define-key map (kbd "q") 'quit-window)
+    (define-key map (kbd "?") 'gh-help)
+    map)
+  "Keymap for `gh-issue-view-mode'.")
 
 (defvar-local gh-current-filters nil
   "Current filters applied to the list.")
@@ -92,6 +106,9 @@
 
 (defvar-local gh-current-pr-number nil
   "The PR number for the current PR view buffer.")
+
+(defvar-local gh-current-issue-number nil
+  "The issue number for the current issue view buffer.")
 
 ;;; Utility functions
 
@@ -143,8 +160,7 @@
   (let* ((number (alist-get 'number pr))
          (title (alist-get 'title pr))
          (state (alist-get 'state pr))
-         (author (alist-get 'login (alist-get 'author pr)))
-         (updated (alist-get 'updatedAt pr)))
+         (author (alist-get 'login (alist-get 'author pr))))
     (format "#%-5d %-8s %-20s %s"
             number
             state
@@ -183,16 +199,31 @@
 
 (defun gh--display-items (items type title)
   "Display ITEMS of TYPE with TITLE."
-  (let ((inhibit-read-only t))
+  (let ((inhibit-read-only t)
+        (evil-enabled (and (boundp 'evil-mode) evil-mode
+                          (boundp 'evil-state) (eq evil-state 'normal))))
     (erase-buffer)
     (insert (format "%s\n" title))
     (insert (format "Found %d items\n\n" (length items)))
     (if (eq type 'pr)
+        (if evil-enabled
+            ;; Evil mode keybindings for PRs
+            (progn
+              (insert "Commands: [RET] view  [d] diff  [c] checks  [C] comment  [r] review  [m] merge  [o] browser  [R/gr] refresh  [q] quit  [?] help\n")
+              (insert "Filters:  [s] state  [a] author  [A] assignee  [M] my PRs  [i] issues  [j/k] move\n\n"))
+          ;; Emacs keybindings for PRs
+          (progn
+            (insert "Commands: [RET] view  [d] diff  [c] checks  [C] comment  [r] review  [m] merge  [o] browser  [g] refresh  [q] quit  [?] help\n")
+            (insert "Filters:  [s] state  [a] author  [A] assignee  [M] my PRs  [i] issues\n\n")))
+      (if evil-enabled
+          ;; Evil mode keybindings for Issues
+          (progn
+            (insert "Commands: [RET] view  [C] comment  [e] edit  [o] browser  [R/gr] refresh  [q] quit  [?] help\n")
+            (insert "Filters:  [s] state  [a] author  [A] assignee  [M] my issues  [p] PRs  [j/k] move\n\n"))
+        ;; Emacs keybindings for Issues
         (progn
-          (insert "Commands: [RET] view  [d] diff  [c] checks  [C] comment  [r] review  [m] merge  [o] browser  [g] refresh  [q] quit\n")
-          (insert "Filters:  [s] state  [a] author  [A] assignee  [M] my PRs  [i] issues\n\n"))
-      (insert "Commands: [RET] view  [C] comment  [e] edit  [o] browser  [g] refresh  [q] quit\n")
-      (insert "Filters:  [s] state  [a] author  [A] assignee  [M] my issues  [p] PRs\n\n"))
+          (insert "Commands: [RET] view  [C] comment  [e] edit  [o] browser  [g] refresh  [q] quit  [?] help\n")
+          (insert "Filters:  [s] state  [a] author  [A] assignee  [M] my issues  [p] PRs\n\n"))))
     (insert (format "#%-5s %-8s %-20s %s\n" "NUM" "STATE" "AUTHOR" "TITLE"))
     (insert (make-string 80 ?-) "\n")
     (if (null items)
@@ -254,13 +285,22 @@
   "View PR with PR-NUMBER."
   (interactive "nPR number: ")
   (message "Loading PR #%d..." pr-number)
-  (let ((output (gh--run-command "pr" "view" (number-to-string pr-number))))
+  (let ((output (gh--run-command "pr" "view" (number-to-string pr-number)))
+        (comments (gh--run-command "pr" "view" (number-to-string pr-number) "--comments")))
     (with-current-buffer (get-buffer-create (format "*GitHub PR #%d*" pr-number))
       (gh-pr-view-mode)
       (setq gh-current-pr-number pr-number)
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert output)
+        ;; Add comments section
+        (when (and comments (not (string-empty-p comments)))
+          (goto-char (point-max))
+          (insert "\n\n")
+          (insert (make-string 80 ?─) "\n")
+          (insert "COMMENTS\n")
+          (insert (make-string 80 ?─) "\n\n")
+          (insert comments))
         ;; Clean up control characters
         (goto-char (point-min))
         (while (re-search-forward "[\r\f]" nil t)
@@ -304,13 +344,17 @@
         (message "Adding comment to PR #%d..." number)))))
 
 (defun gh-pr-review-at-point ()
-  "Review PR at point."
+  "Review PR at point with a choice of review type."
   (interactive)
   (let ((pr (gh--get-item-at-point)))
     (when pr
-      (let ((number (alist-get 'number pr)))
-        (gh--run-command "pr" "review" (number-to-string number))
-        (message "Reviewing PR #%d..." number)))))
+      (let* ((number (alist-get 'number pr))
+             (review-type (completing-read "Review type: "
+                                          '("approve" "comment" "request-changes")
+                                          nil t)))
+        (gh--run-command "pr" "review" (concat "--" review-type) (number-to-string number))
+        (message "Submitted %s review for PR #%d" review-type number)
+        (gh-refresh)))))
 
 (defun gh-pr-merge-at-point ()
   "Merge PR at point."
@@ -434,14 +478,28 @@
   "View issue with ISSUE-NUMBER."
   (interactive "nIssue number: ")
   (message "Loading issue #%d..." issue-number)
-  (let ((output (gh--run-command "issue" "view" (number-to-string issue-number))))
+  (let ((output (gh--run-command "issue" "view" (number-to-string issue-number)))
+        (comments (gh--run-command "issue" "view" (number-to-string issue-number) "--comments")))
     (with-current-buffer (get-buffer-create (format "*GitHub Issue #%d*" issue-number))
+      (gh-issue-view-mode)
+      (setq gh-current-issue-number issue-number)
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert output)
+        ;; Add comments section
+        (when (and comments (not (string-empty-p comments)))
+          (goto-char (point-max))
+          (insert "\n\n")
+          (insert (make-string 80 ?─) "\n")
+          (insert "COMMENTS\n")
+          (insert (make-string 80 ?─) "\n\n")
+          (insert comments))
+        ;; Clean up control characters
         (goto-char (point-min))
-        (view-mode)
-        (switch-to-buffer (current-buffer)))
+        (while (re-search-forward "[\r\f]" nil t)
+          (replace-match ""))
+        (goto-char (point-min)))
+      (switch-to-buffer (current-buffer))
       (message "Loaded issue #%d" issue-number))))
 
 (defun gh-issue-comment-at-point ()
@@ -512,11 +570,15 @@
     (message "Adding comment to PR #%d..." gh-current-pr-number)))
 
 (defun gh-pr-view-review ()
-  "Review the current PR."
+  "Review the current PR with a choice of review type."
   (interactive)
   (when gh-current-pr-number
-    (gh--run-command "pr" "review" (number-to-string gh-current-pr-number))
-    (message "Reviewing PR #%d..." gh-current-pr-number)))
+    (let ((review-type (completing-read "Review type: "
+                                        '("approve" "comment" "request-changes")
+                                        nil t)))
+      (gh--run-command "pr" "review" (concat "--" review-type) (number-to-string gh-current-pr-number))
+      (message "Submitted %s review for PR #%d" review-type gh-current-pr-number)
+      (gh-pr-view-refresh))))
 
 (defun gh-pr-view-approve ()
   "Approve the current PR."
@@ -548,6 +610,222 @@
   (interactive)
   (when gh-current-pr-number
     (gh-view-pr gh-current-pr-number)))
+
+;;; Issue View Commands (for use in gh-issue-view-mode)
+
+(defun gh-issue-view-comment ()
+  "Add comment to the current issue."
+  (interactive)
+  (when gh-current-issue-number
+    (gh--run-command "issue" "comment" (number-to-string gh-current-issue-number))
+    (message "Adding comment to issue #%d..." gh-current-issue-number)))
+
+(defun gh-issue-view-edit ()
+  "Edit the current issue."
+  (interactive)
+  (when gh-current-issue-number
+    (gh--run-command "issue" "edit" (number-to-string gh-current-issue-number))
+    (message "Editing issue #%d..." gh-current-issue-number)
+    (gh-issue-view-refresh)))
+
+(defun gh-issue-view-open-browser ()
+  "Open the current issue in browser."
+  (interactive)
+  (when gh-current-issue-number
+    (gh--run-command "issue" "view" "--web" (number-to-string gh-current-issue-number))
+    (message "Opening issue #%d in browser..." gh-current-issue-number)))
+
+(defun gh-issue-view-refresh ()
+  "Refresh the current issue view."
+  (interactive)
+  (when gh-current-issue-number
+    (gh-view-issue gh-current-issue-number)))
+
+;;; Help function
+
+(defun gh-help ()
+  "Display help for GitHub mode keybindings."
+  (interactive)
+  (let ((evil-enabled (and (boundp 'evil-mode) evil-mode)))
+    (with-current-buffer (get-buffer-create "*GitHub Help*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "GitHub Mode Help\n" 'face 'bold))
+        (insert (make-string 80 ?=) "\n\n")
+
+        ;; Features section
+        (insert (propertize "FEATURES:\n" 'face 'bold))
+        (insert "  • View and manage GitHub pull requests and issues\n")
+        (insert "  • View PR diffs, checks, and comments\n")
+        (insert "  • Review and merge pull requests\n")
+        (insert "  • Filter by state, author, and assignee\n")
+        (insert "  • Open items in web browser\n")
+        (insert "  • Full Emacspeak integration for screen readers\n")
+        (insert "  • Evil mode support with vim-like keybindings\n\n")
+
+        ;; PR Mode keybindings
+        (insert (propertize "PULL REQUEST LIST MODE\n" 'face 'bold))
+        (insert (make-string 80 ?-) "\n\n")
+
+        (insert (propertize "Emacs Keybindings:\n" 'face 'bold))
+        (insert "  RET     - View PR details\n")
+        (insert "  d       - Show PR diff\n")
+        (insert "  c       - Show PR checks\n")
+        (insert "  C       - Add comment\n")
+        (insert "  r       - Review PR (approve/comment/request-changes)\n")
+        (insert "  m       - Merge PR\n")
+        (insert "  o       - Open PR in browser\n")
+        (insert "  g       - Refresh\n")
+        (insert "  s       - Filter by state\n")
+        (insert "  a       - Filter by author\n")
+        (insert "  A       - Filter by assignee\n")
+        (insert "  M       - Show my PRs\n")
+        (insert "  i       - Switch to issues\n")
+        (insert "  n       - Next line\n")
+        (insert "  p       - Previous line\n")
+        (insert "  q       - Quit window\n")
+        (insert "  ?       - Show this help\n\n")
+
+        (when evil-enabled
+          (insert (propertize "Evil Mode Keybindings:\n" 'face 'bold))
+          (insert "  RET     - View PR details\n")
+          (insert "  d       - Show PR diff\n")
+          (insert "  c       - Show PR checks\n")
+          (insert "  C       - Add comment\n")
+          (insert "  r       - Review PR\n")
+          (insert "  R       - Refresh (uppercase variant)\n")
+          (insert "  m       - Merge PR\n")
+          (insert "  M       - Show my PRs\n")
+          (insert "  o       - Open in browser\n")
+          (insert "  s       - Filter by state\n")
+          (insert "  a       - Filter by author\n")
+          (insert "  A       - Filter by assignee\n")
+          (insert "  i       - Switch to issues\n")
+          (insert "  j, k    - Move down/up\n")
+          (insert "  gg      - Jump to top\n")
+          (insert "  G       - Jump to bottom\n")
+          (insert "  gr      - Refresh (Vim-style)\n")
+          (insert "  q       - Quit window\n")
+          (insert "  ZZ, ZQ  - Quit window (Vim-style)\n")
+          (insert "  ?       - Show this help\n\n"))
+
+        ;; Issue Mode keybindings
+        (insert (propertize "ISSUE LIST MODE\n" 'face 'bold))
+        (insert (make-string 80 ?-) "\n\n")
+
+        (insert (propertize "Emacs Keybindings:\n" 'face 'bold))
+        (insert "  RET     - View issue details\n")
+        (insert "  C       - Add comment\n")
+        (insert "  e       - Edit issue\n")
+        (insert "  o       - Open issue in browser\n")
+        (insert "  g       - Refresh\n")
+        (insert "  s       - Filter by state\n")
+        (insert "  a       - Filter by author\n")
+        (insert "  A       - Filter by assignee\n")
+        (insert "  M       - Show my issues\n")
+        (insert "  p       - Switch to PRs\n")
+        (insert "  n       - Next line\n")
+        (insert "  P       - Previous line\n")
+        (insert "  q       - Quit window\n")
+        (insert "  ?       - Show this help\n\n")
+
+        (when evil-enabled
+          (insert (propertize "Evil Mode Keybindings:\n" 'face 'bold))
+          (insert "  RET     - View issue details\n")
+          (insert "  C       - Add comment\n")
+          (insert "  e, E    - Edit issue\n")
+          (insert "  o       - Open in browser\n")
+          (insert "  R       - Refresh (uppercase variant)\n")
+          (insert "  s       - Filter by state\n")
+          (insert "  a       - Filter by author\n")
+          (insert "  A       - Filter by assignee\n")
+          (insert "  M       - Show my issues\n")
+          (insert "  p       - Switch to PRs\n")
+          (insert "  j, k    - Move down/up\n")
+          (insert "  gg      - Jump to top\n")
+          (insert "  G       - Jump to bottom\n")
+          (insert "  gr      - Refresh (Vim-style)\n")
+          (insert "  q       - Quit window\n")
+          (insert "  ZZ, ZQ  - Quit window (Vim-style)\n")
+          (insert "  ?       - Show this help\n\n"))
+
+        ;; PR View Mode
+        (insert (propertize "PULL REQUEST DETAIL VIEW MODE\n" 'face 'bold))
+        (insert (make-string 80 ?-) "\n\n")
+
+        (insert (propertize "Emacs Keybindings:\n" 'face 'bold))
+        (insert "  d       - Show diff\n")
+        (insert "  c       - Show checks\n")
+        (insert "  C       - Add comment\n")
+        (insert "  r       - Review PR\n")
+        (insert "  a       - Approve PR\n")
+        (insert "  m       - Merge PR\n")
+        (insert "  o       - Open in browser\n")
+        (insert "  g       - Refresh\n")
+        (insert "  q       - Quit window\n")
+        (insert "  ?       - Show this help\n\n")
+
+        (when evil-enabled
+          (insert (propertize "Evil Mode Keybindings:\n" 'face 'bold))
+          (insert "  d       - Show diff\n")
+          (insert "  c       - Show checks\n")
+          (insert "  C       - Add comment\n")
+          (insert "  r       - Review PR\n")
+          (insert "  R       - Refresh (uppercase variant)\n")
+          (insert "  a       - Approve PR\n")
+          (insert "  m       - Merge PR\n")
+          (insert "  o       - Open in browser\n")
+          (insert "  j, k    - Move down/up\n")
+          (insert "  gg      - Jump to top\n")
+          (insert "  G       - Jump to bottom\n")
+          (insert "  gr      - Refresh (Vim-style)\n")
+          (insert "  q       - Quit window\n")
+          (insert "  ZZ, ZQ  - Quit window (Vim-style)\n")
+          (insert "  ?       - Show this help\n\n"))
+
+        ;; Issue View Mode
+        (insert (propertize "ISSUE DETAIL VIEW MODE\n" 'face 'bold))
+        (insert (make-string 80 ?-) "\n\n")
+
+        (insert (propertize "Emacs Keybindings:\n" 'face 'bold))
+        (insert "  C       - Add comment\n")
+        (insert "  e       - Edit issue\n")
+        (insert "  o       - Open in browser\n")
+        (insert "  g       - Refresh\n")
+        (insert "  q       - Quit window\n")
+        (insert "  ?       - Show this help\n\n")
+
+        (when evil-enabled
+          (insert (propertize "Evil Mode Keybindings:\n" 'face 'bold))
+          (insert "  C       - Add comment\n")
+          (insert "  e, E    - Edit issue\n")
+          (insert "  o       - Open in browser\n")
+          (insert "  R       - Refresh (uppercase variant)\n")
+          (insert "  j, k    - Move down/up\n")
+          (insert "  gg      - Jump to top\n")
+          (insert "  G       - Jump to bottom\n")
+          (insert "  gr      - Refresh (Vim-style)\n")
+          (insert "  q       - Quit window\n")
+          (insert "  ZZ, ZQ  - Quit window (Vim-style)\n")
+          (insert "  ?       - Show this help\n\n"))
+
+        ;; Evil mode notice
+        (when evil-enabled
+          (insert (make-string 80 ?=) "\n")
+          (insert (propertize "Evil Mode Active\n" 'face 'bold))
+          (insert "Vim-style keybindings are enabled with:\n")
+          (insert "  • Standard vim navigation (j/k for up/down)\n")
+          (insert "  • gg/G for jump to top/bottom\n")
+          (insert "  • r/R for refresh operations\n")
+          (insert "  • gr for vim-style refresh\n")
+          (insert "  • ZZ/ZQ for quit\n")
+          (insert "  • Uppercase variants for common actions (E, R, etc.)\n\n"))
+
+        (insert (make-string 80 ?=) "\n")
+        (insert "Press 'q' to close this help buffer.\n")
+        (goto-char (point-min))
+        (view-mode)
+        (switch-to-buffer (current-buffer))))))
 
 ;;; Major modes
 
@@ -585,6 +863,20 @@
           "  "
           mode-line-end-spaces)))
 
+(define-derived-mode gh-issue-view-mode special-mode "GitHub-Issue-View"
+  "Major mode for viewing a single GitHub issue.
+
+\\{gh-issue-view-mode-map}"
+  (setq truncate-lines nil)
+  (setq buffer-read-only t)
+  (setq mode-line-format
+        '("%e" mode-line-front-space
+          mode-line-buffer-identification
+          "  "
+          "Issue #" (:eval (when gh-current-issue-number (number-to-string gh-current-issue-number)))
+          "  "
+          mode-line-end-spaces)))
+
 (defun gh--emacspeak-post-command ()
   "Emacspeak post-command hook for gh mode."
   (when (and (featurep 'emacspeak)
@@ -595,9 +887,100 @@
 ;;; Evil mode integration
 
 (with-eval-after-load 'evil
-  (evil-set-initial-state 'gh-pr-mode 'emacs)
-  (evil-set-initial-state 'gh-issue-mode 'emacs)
-  (evil-set-initial-state 'gh-pr-view-mode 'emacs))
+  ;; Use normal state for vim-like bindings
+  (evil-set-initial-state 'gh-pr-mode 'normal)
+  (evil-set-initial-state 'gh-issue-mode 'normal)
+  (evil-set-initial-state 'gh-pr-view-mode 'normal)
+  (evil-set-initial-state 'gh-issue-view-mode 'normal)
+
+  ;; Define Evil keybindings for gh-pr-mode
+  (evil-define-key 'normal gh-pr-mode-map
+    (kbd "RET") 'gh-view-pr-at-point
+    "j" 'next-line
+    "k" 'previous-line
+    "d" 'gh-pr-diff-at-point
+    "c" 'gh-pr-checks-at-point
+    "C" 'gh-pr-comment-at-point
+    "r" 'gh-pr-review-at-point
+    "R" 'gh-refresh                          ; Uppercase variant for refresh
+    "m" 'gh-pr-merge-at-point
+    "M" 'gh-my-prs                           ; Keep M for my PRs
+    "o" 'gh-open-in-browser-at-point
+    "g" nil                                  ; Prefix key for 'gr' and 'gg'
+    "gr" 'gh-refresh                         ; Vim-style refresh
+    "gg" 'evil-goto-first-line
+    "G" 'evil-goto-line
+    "s" 'gh-pr-filter-by-state
+    "a" 'gh-pr-filter-by-author
+    "A" 'gh-pr-filter-by-assignee
+    "i" 'gh-list-issues
+    "q" 'quit-window
+    "ZZ" 'quit-window                        ; Vim-style quit
+    "ZQ" 'quit-window                        ; Vim-style force quit
+    "?" 'gh-help)
+
+  ;; Define Evil keybindings for gh-issue-mode
+  (evil-define-key 'normal gh-issue-mode-map
+    (kbd "RET") 'gh-view-issue-at-point
+    "j" 'next-line
+    "k" 'previous-line
+    "C" 'gh-issue-comment-at-point
+    "e" 'gh-issue-edit-at-point
+    "E" 'gh-issue-edit-at-point              ; Uppercase variant
+    "o" 'gh-open-in-browser-at-point
+    "g" nil                                  ; Prefix key for 'gr' and 'gg'
+    "gr" 'gh-refresh                         ; Vim-style refresh
+    "R" 'gh-refresh                          ; Uppercase variant for refresh
+    "gg" 'evil-goto-first-line
+    "G" 'evil-goto-line
+    "s" 'gh-issue-filter-by-state
+    "a" 'gh-issue-filter-by-author
+    "A" 'gh-issue-filter-by-assignee
+    "M" 'gh-my-issues
+    "p" 'gh-list-prs
+    "q" 'quit-window
+    "ZZ" 'quit-window                        ; Vim-style quit
+    "ZQ" 'quit-window                        ; Vim-style force quit
+    "?" 'gh-help)
+
+  ;; Define Evil keybindings for gh-pr-view-mode
+  (evil-define-key 'normal gh-pr-view-mode-map
+    "d" 'gh-pr-view-diff
+    "c" 'gh-pr-view-checks
+    "C" 'gh-pr-view-comment
+    "r" 'gh-pr-view-review
+    "R" 'gh-pr-view-refresh                  ; Uppercase variant for refresh
+    "a" 'gh-pr-view-approve
+    "m" 'gh-pr-view-merge
+    "o" 'gh-pr-view-open-browser
+    "g" nil                                  ; Prefix key for 'gr' and 'gg'
+    "gr" 'gh-pr-view-refresh                 ; Vim-style refresh
+    "gg" 'evil-goto-first-line
+    "G" 'evil-goto-line
+    "j" 'next-line
+    "k" 'previous-line
+    "q" 'quit-window
+    "ZZ" 'quit-window                        ; Vim-style quit
+    "ZQ" 'quit-window                        ; Vim-style force quit
+    "?" 'gh-help)
+
+  ;; Define Evil keybindings for gh-issue-view-mode
+  (evil-define-key 'normal gh-issue-view-mode-map
+    "C" 'gh-issue-view-comment
+    "e" 'gh-issue-view-edit
+    "E" 'gh-issue-view-edit                  ; Uppercase variant
+    "o" 'gh-issue-view-open-browser
+    "g" nil                                  ; Prefix key for 'gr' and 'gg'
+    "gr" 'gh-issue-view-refresh              ; Vim-style refresh
+    "R" 'gh-issue-view-refresh               ; Uppercase variant for refresh
+    "gg" 'evil-goto-first-line
+    "G" 'evil-goto-line
+    "j" 'next-line
+    "k" 'previous-line
+    "q" 'quit-window
+    "ZZ" 'quit-window                        ; Vim-style quit
+    "ZQ" 'quit-window                        ; Vim-style force quit
+    "?" 'gh-help))
 
 ;;; Emacspeak advice
 
