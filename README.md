@@ -1,5 +1,9 @@
 # gh.el - Emacs Interface for GitHub CLI
 
+<p align="center">
+  <img src="logo.png" alt="gh-wrap logo" width="200">
+</p>
+
 An Emacs package providing a full-featured interface to the GitHub CLI (gh), with enhanced accessibility support for Emacspeak users.
 
 ## Features
